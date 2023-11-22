@@ -182,29 +182,50 @@ impl TaskControlBlock {
             .unwrap()
             .ppn();
         // push arguments on user stack
-        user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
-        let argv_base = user_sp;
-        let mut argv: Vec<_> = (0..=args.len())
-            .map(|arg| {
-                translated_refmut(
-                    memory_set.token(),
-                    (argv_base + arg * core::mem::size_of::<usize>()) as *mut usize,
-                )
-            })
-            .collect();
-        *argv[args.len()] = 0;
-        for i in 0..args.len() {
-            user_sp -= args[i].len() + 1;
-            *argv[i] = user_sp;
+        // 准备存储参数字符串的地址
+        let mut argv_addr: Vec<usize> = Vec::new();
+
+        // 将参数字符串逐个放入用户程序栈中，并记录地址
+        for arg in args.iter() {
+            user_sp -= arg.len() + 1;
+            argv_addr.push(user_sp);
+
             let mut p = user_sp;
-            for c in args[i].as_bytes() {
+            for c in arg.as_bytes() {
                 *translated_refmut(memory_set.token(), p as *mut u8) = *c;
                 p += 1;
             }
             *translated_refmut(memory_set.token(), p as *mut u8) = 0;
         }
+
+        // 计算并保存argv数组的基地址
+        user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
+        let argv_base = user_sp;
+
+        // 构建argv数组，每个元素指向对应参数的地址
+        let mut argv: Vec<_> = (0..=args.len())
+            .map(|arg| {
+                translated_refmut(
+                    memory_set.token(), 
+                    (argv_base + arg * core::mem::size_of::<usize>()) as *mut usize,
+                )
+            })
+            .collect();
+
+        // 将参数地址填入argv数组
+        for i in 0..args.len() {
+            *argv[i] = argv_addr[i];
+        }
+
+        // 最后一个元素为NULL，表示数组结束
+        *argv[args.len()] = 0;
+
+        // 在栈上保存参数的数量
+        user_sp -= core::mem::size_of::<usize>();
+        *translated_refmut(memory_set.token(), user_sp as *mut usize) = args.len();
+
         // make the user_sp aligned to 8B for k210 platform
-        user_sp -= user_sp % core::mem::size_of::<usize>();
+        //user_sp -= user_sp % core::mem::size_of::<usize>();
 
         // **** access current TCB exclusively
         let mut inner = self.inner_exclusive_access();
